@@ -1,4 +1,4 @@
-use crate::map;
+use crate::world::map;
 
 pub struct Player {
     pub x: f32,

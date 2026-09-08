@@ -1,6 +1,6 @@
 # Revenant
 
-![Revenant Demo](assets/firstvisualoutput.gif)
+![Revenant Demo](src/gameasset/previews/firstvisualoutput.gif)
 
 
 ## Run
@@ -19,6 +19,10 @@ cargo run --release
 
 Walk into the marked exit tile in the south-west room to clear the level.
 Green pickups restore health, yellow pickups restore ammo.
+
+## Asset layout
+
+Runtime art is kept under [`src/gameasset`](src/gameasset/README.md), organized into HUD weapons, world projectiles, actor billboards, and previews.
 
 ## Fullscreen / Display
 

@@ -1,5 +1,5 @@
-// Procedurally generated wall/sprite textures. No original game assets are used
-// anywhere in this project -- every texture here is synthesized at startup.
+// Procedural fallback wall textures. Actor/projectile art is catalogued under
+// src/gameasset and can replace these silhouettes as the bitmap loader lands.
 
 pub const TEX_SIZE: usize = 64;
 
@@ -98,11 +98,11 @@ impl TextureSet {
     pub fn generate() -> Self {
         TextureSet {
             walls: vec![
-                brick_texture((150, 60, 50), (60, 60, 60)),   // 1: red brick
+                brick_texture((150, 60, 50), (60, 60, 60)), // 1: red brick
                 panel_texture((90, 95, 100), (200, 170, 40)), // 2: tech panel
                 hazard_texture((200, 170, 20), (30, 30, 30)), // 3: hazard stripe
-                stone_texture((100, 100, 110)),               // 4: cracked stone
-                panel_texture((60, 70, 90), (40, 200, 200)),  // 5: blue panel (exit)
+                stone_texture((100, 100, 110)),             // 4: cracked stone
+                panel_texture((60, 70, 90), (40, 200, 200)), // 5: blue panel (exit)
             ],
         }
     }

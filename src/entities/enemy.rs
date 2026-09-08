@@ -1,8 +1,8 @@
-use crate::map;
-use crate::player::Player;
-use crate::textures::pack;
+use crate::entities::player::Player;
+use crate::rendering::textures::pack;
+use crate::world::map;
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum EnemyState {
     Idle,
     Chasing,
@@ -10,9 +10,35 @@ pub enum EnemyState {
     Dead,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum EnemyKind {
+    Normal,
+    MidLevel,
+    Boss,
+}
+
+impl EnemyKind {
+    pub fn from_tier(tier: u8) -> Self {
+        match tier {
+            0 => Self::Normal,
+            1 => Self::MidLevel,
+            _ => Self::Boss,
+        }
+    }
+
+    pub fn asset_path(self) -> &'static str {
+        match self {
+            Self::Normal => "src/gameasset/actors/normal/orc-idle.png",
+            Self::MidLevel => "src/gameasset/actors/mid_level/walk - sword.png",
+            Self::Boss => "src/gameasset/actors/boss/andromalius-57x88.png",
+        }
+    }
+}
+
 pub struct Enemy {
     pub x: f32,
     pub y: f32,
+    pub kind: EnemyKind,
     pub health: i32,
     pub state: EnemyState,
     pub attack_cooldown: f32,
@@ -21,14 +47,19 @@ pub struct Enemy {
 
 const DETECT_RADIUS: f32 = 8.0;
 const ATTACK_RADIUS: f32 = 1.2;
-const SPEED: f32 = 1.4;
 
 impl Enemy {
-    pub fn new(x: f32, y: f32) -> Self {
+    pub fn new(x: f32, y: f32, kind: EnemyKind) -> Self {
+        let health = match kind {
+            EnemyKind::Normal => 45,
+            EnemyKind::MidLevel => 90,
+            EnemyKind::Boss => 220,
+        };
         Enemy {
             x,
             y,
-            health: 60,
+            kind,
+            health,
             state: EnemyState::Idle,
             attack_cooldown: 0.0,
             hit_flash: 0.0,
@@ -74,7 +105,12 @@ impl Enemy {
                 if dist < ATTACK_RADIUS {
                     self.state = EnemyState::Attacking;
                 } else if dist < DETECT_RADIUS * 1.5 {
-                    let step = SPEED * dt / dist.max(0.001);
+                    let speed = match self.kind {
+                        EnemyKind::Normal => 1.35,
+                        EnemyKind::MidLevel => 1.7,
+                        EnemyKind::Boss => 0.9,
+                    };
+                    let step = speed * dt / dist.max(0.001);
                     let nx = self.x + dx * step;
                     let ny = self.y + dy * step;
                     if !map::is_wall(nx.floor() as i32, self.y.floor() as i32) {
@@ -93,8 +129,17 @@ impl Enemy {
                 } else {
                     self.attack_cooldown -= dt;
                     if self.attack_cooldown <= 0.0 {
-                        player.damage(8);
-                        self.attack_cooldown = 1.0;
+                        let damage = match self.kind {
+                            EnemyKind::Normal => 6,
+                            EnemyKind::MidLevel => 10,
+                            EnemyKind::Boss => 18,
+                        };
+                        player.damage(damage);
+                        self.attack_cooldown = match self.kind {
+                            EnemyKind::Normal => 1.0,
+                            EnemyKind::MidLevel => 0.8,
+                            EnemyKind::Boss => 1.4,
+                        };
                     }
                 }
             }
@@ -106,10 +151,20 @@ impl Enemy {
         if self.hit_flash > 0.0 {
             pack(255, 255, 255)
         } else {
-            match self.state {
-                EnemyState::Dead => pack(80, 20, 20),
-                _ => pack(180, 40, 40),
+            match (self.state, self.kind) {
+                (EnemyState::Dead, _) => pack(80, 20, 20),
+                (_, EnemyKind::Normal) => pack(180, 40, 40),
+                (_, EnemyKind::MidLevel) => pack(180, 80, 210),
+                (_, EnemyKind::Boss) => pack(40, 180, 150),
             }
+        }
+    }
+
+    pub fn sprite_size(&self) -> f32 {
+        match self.kind {
+            EnemyKind::Normal => 0.65,
+            EnemyKind::MidLevel => 0.85,
+            EnemyKind::Boss => 1.25,
         }
     }
 }

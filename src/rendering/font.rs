@@ -1,5 +1,5 @@
-// Tiny 3x5 bitmap font, digits and a few HUD glyphs only.
-// Each glyph is 5 rows of 3 bits (MSB unused), stored top-to-bottom.
+// Tiny 3x5 bitmap font, digits and a few HUD glyphs only
+// Each glyph is 5 rows of 3 bits (MSB unused), stored top-to-bottom
 
 pub const GLYPH_W: usize = 3;
 
@@ -34,8 +34,17 @@ fn glyph(ch: char) -> [u8; 5] {
     }
 }
 
-/// Draws text into an RGB framebuffer at (x, y) with the given pixel scale and color.
-pub fn draw_text(buf: &mut [u32], w: usize, h: usize, x: i32, y: i32, text: &str, scale: i32, color: u32) {
+/// Draws text into an RGB framebuffer at (x, y) with the given pixel scale and color
+pub fn draw_text(
+    buf: &mut [u32],
+    w: usize,
+    h: usize,
+    x: i32,
+    y: i32,
+    text: &str,
+    scale: i32,
+    color: u32,
+) {
     let mut cx = x;
     for ch in text.chars() {
         let rows = glyph(ch);

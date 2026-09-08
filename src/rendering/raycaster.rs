@@ -1,6 +1,6 @@
-use crate::map;
-use crate::player::Player;
-use crate::textures::{shade, TextureSet, TEX_SIZE};
+use crate::entities::player::Player;
+use crate::rendering::textures::{shade, TextureSet, TEX_SIZE};
+use crate::world::map;
 
 pub const FOV: f32 = std::f32::consts::PI / 3.0; // 60 degrees
 
@@ -19,8 +19,16 @@ pub fn cast_ray(px: f32, py: f32, angle: f32) -> Hit {
     let mut map_x = px.floor() as i32;
     let mut map_y = py.floor() as i32;
 
-    let delta_dist_x = if dir_x.abs() < 1e-6 { 1e30 } else { (1.0 / dir_x).abs() };
-    let delta_dist_y = if dir_y.abs() < 1e-6 { 1e30 } else { (1.0 / dir_y).abs() };
+    let delta_dist_x = if dir_x.abs() < 1e-6 {
+        1e30
+    } else {
+        (1.0 / dir_x).abs()
+    };
+    let delta_dist_y = if dir_y.abs() < 1e-6 {
+        1e30
+    } else {
+        (1.0 / dir_y).abs()
+    };
 
     let (step_x, mut side_dist_x) = if dir_x < 0.0 {
         (-1, (px - map_x as f32) * delta_dist_x)
@@ -50,7 +58,7 @@ pub fn cast_ray(px: f32, py: f32, angle: f32) -> Hit {
             break;
         }
         if tex_id == 9 {
-            // Exit tile is walkable, not a wall; keep marching through it visually as floor.
+            // Exit tile is walkable, not a wall
             continue;
         }
     }
