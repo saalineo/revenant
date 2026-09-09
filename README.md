@@ -11,11 +11,24 @@ cargo run --release
 
 ## Controls
 
-- `W` / `S` — move forward / backward
-- `A` / `D` — strafe left / right
-- `Left` / `Right` — turn
-- `Space` — fire
-- `Esc` — quit
+### Movement & Aiming
+- `W` / `S` — Move forward / backward
+- `A` / `D` — Strafe left / right
+- `Left` / `Right` — Turn left / right
+
+### Combat & Weapons
+- `Space` / `Left Mouse Click` — Fire equipped weapon
+- `1` — Equip Assault Rifle
+- `2` — Equip Short Gun (Pistol)
+- `3` — Equip Knife
+- `4` — Equip Grenade
+- `Q` — Quick switch between primary Rifle & Short Gun
+- `Scroll Wheel Up` / `Down` — Cycle through all weapons
+- `V` / `F` / `Right Mouse Click` — Quick melee knife attack
+- `G` — Quick throw grenade
+
+### System
+- `Esc` — Quit game
 
 Walk into the marked exit tile in the south-west room to clear the level.
 Green pickups restore health, yellow pickups restore ammo.

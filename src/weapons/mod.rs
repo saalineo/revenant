@@ -1,10 +1,9 @@
-//! HUD weapon animation state and world grenade burst animation.
-
 use crate::input::InputEvent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WeaponKind {
     Gun,
+    ShortGun,
     Knife,
     Grenade,
 }
@@ -41,16 +40,27 @@ impl PlayerArsenal {
         }
     }
 
-    pub fn handle_input(&mut self, event: InputEvent) {
+    /// Handles an input event. Returns true if weapon equipment changed.
+    pub fn handle_input(&mut self, event: InputEvent) -> bool {
+        let prev = self.equipped;
         match event {
-            InputEvent::EquipSlot(slot) if (1..=3).contains(&slot) => {
+            InputEvent::EquipSlot(slot) if (1..=4).contains(&slot) => {
                 let weapon = match slot {
                     1 => WeaponKind::Gun,
-                    2 => WeaponKind::Knife,
-                    3 => WeaponKind::Grenade,
+                    2 => WeaponKind::ShortGun,
+                    3 => WeaponKind::Knife,
+                    4 => WeaponKind::Grenade,
                     _ => unreachable!(),
                 };
                 self.select(weapon);
+            }
+            InputEvent::SwitchWeapon => {
+                let next = match self.equipped {
+                    WeaponKind::Gun => WeaponKind::ShortGun,
+                    WeaponKind::ShortGun => WeaponKind::Gun,
+                    _ => WeaponKind::Gun,
+                };
+                self.select(next);
             }
             InputEvent::ScrollUp => self.cycle(1),
             InputEvent::ScrollDown => self.cycle(-1),
@@ -59,6 +69,9 @@ impl PlayerArsenal {
             InputEvent::Fire => match self.state {
                 WeaponState::Idle {
                     weapon: WeaponKind::Gun,
+                }
+                | WeaponState::Idle {
+                    weapon: WeaponKind::ShortGun,
                 } => self.start_shoot(),
                 WeaponState::Idle {
                     weapon: WeaponKind::Knife,
@@ -70,6 +83,7 @@ impl PlayerArsenal {
             },
             _ => {}
         }
+        self.equipped != prev
     }
 
     fn select(&mut self, weapon: WeaponKind) {
@@ -81,7 +95,12 @@ impl PlayerArsenal {
     }
 
     fn cycle(&mut self, direction: i8) {
-        let all = [WeaponKind::Gun, WeaponKind::Knife, WeaponKind::Grenade];
+        let all = [
+            WeaponKind::Gun,
+            WeaponKind::ShortGun,
+            WeaponKind::Knife,
+            WeaponKind::Grenade,
+        ];
         let current = all.iter().position(|w| *w == self.equipped).unwrap_or(0) as i8;
         let next = (current + direction).rem_euclid(all.len() as i8) as usize;
         self.select(all[next]);
@@ -129,7 +148,7 @@ impl PlayerArsenal {
                 }
                 WeaponState::Shooting { .. } => {
                     self.state = WeaponState::Idle {
-                        weapon: WeaponKind::Gun,
+                        weapon: self.equipped,
                     }
                 }
                 WeaponState::Swinging { frame } if frame < 3 => {
@@ -170,7 +189,7 @@ impl PlayerArsenal {
         }
     }
 
-    /// Normalized HUD lift: 1.0 is below the screen, 0.0 is fully raised.
+    /// Normalized HUD lift: 1.0 is below the screen, 0.0 is fully raised
     pub fn y_offset(&self) -> f32 {
         match self.state {
             WeaponState::PullingOut { frame, .. } => 1.0 - (frame as f32 / 4.0),

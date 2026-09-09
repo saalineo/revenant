@@ -1,13 +1,13 @@
 use crate::entities::enemy::{has_line_of_sight, Enemy, EnemyKind};
 use crate::entities::player::Player;
 use crate::input::InputEvent;
+use crate::platform::{Platform, SoundKind};
 use crate::rendering::font;
 use crate::rendering::raycaster::{self, FOV};
 use crate::rendering::textures::{pack, TextureSet};
 use crate::weapons::{Explosion, PlayerArsenal, WeaponKind, WeaponState};
 use crate::world::map;
 use image::RgbaImage;
-use minifb::{Key, KeyRepeat, MouseButton, Window};
 use std::f32::consts::PI;
 
 fn normalize_angle(angle: f32) -> f32 {
@@ -27,6 +27,14 @@ pub enum PickupKind {
     Ammo,
 }
 
+struct Sprite {
+    dist: f32,
+    x: f32,
+    y: f32,
+    color: u32,
+    size: f32,
+}
+
 pub struct Game {
     pub player: Player,
     pub enemies: Vec<Enemy>,
@@ -41,12 +49,18 @@ pub struct Game {
     grenades: Vec<GrenadeProjectile>,
     pub quit_requested: bool,
     hud_gun: HudSprite,
+    hud_short_gun: HudSprite,
+    // Zero-allocation reusable frame buffers (Rule 8)
+    depth_buffer: Vec<f32>,
+    drawables_buffer: Vec<Sprite>,
 }
 
 struct HudSprite {
     image: RgbaImage,
     columns: u32,
     rows: u32,
+    dest_w: i32,
+    dest_h: i32,
 }
 
 impl HudSprite {
@@ -60,6 +74,22 @@ impl HudSprite {
             image,
             columns: 4,
             rows: 3,
+            dest_w: 430,
+            dest_h: 295,
+        }
+    }
+
+    fn pistol() -> Self {
+        let image =
+            image::load_from_memory(include_bytes!("../gameasset/hud/weapons/pistol-asset.png"))
+                .expect("invalid pistol HUD PNG")
+                .to_rgba8();
+        Self {
+            image,
+            columns: 5,
+            rows: 1,
+            dest_w: 40 * 4,
+            dest_h: 30 * 4,
         }
     }
 
@@ -69,10 +99,11 @@ impl HudSprite {
         let frame = (frame as u32).min(self.columns * self.rows - 1);
         let src_x = (frame % self.columns) * cell_w;
         let src_y = (frame / self.columns) * cell_h;
-        let dest_w = 430i32;
-        let dest_h = 295i32;
-        let dest_x = (screen_w as i32 - dest_w) / 2;
-        let dest_y = 78 + (y_offset * dest_h as f32) as i32;
+        let dest_w = self.dest_w;
+        let dest_h = self.dest_h;
+        let screen_h = (buffer.len() / screen_w) as i32;
+        let dest_x = screen_w as i32 - dest_w;
+        let dest_y = (screen_h - dest_h) + (y_offset * dest_h as f32) as i32;
 
         for dy in 0..dest_h {
             let sy = src_y + (dy as u32 * cell_h / dest_h as u32);
@@ -147,26 +178,28 @@ impl Game {
             move_speed: 3.0,
             turn_speed: 2.5,
             arsenal: PlayerArsenal::new(),
-            explosions: Vec::new(),
-            grenades: Vec::new(),
+            explosions: Vec::with_capacity(32),
+            grenades: Vec::with_capacity(16),
             quit_requested: false,
             hud_gun: HudSprite::assault_rifle(),
+            hud_short_gun: HudSprite::pistol(),
+            depth_buffer: vec![f32::MAX; 640],
+            drawables_buffer: Vec::with_capacity(128),
         }
     }
 
-    pub fn update(&mut self, window: &Window, dt: f32) {
+    pub fn tick<P: Platform>(&mut self, platform: &mut P, events: &[InputEvent], dt: f32) {
         if self.won || self.game_over {
             return;
         }
 
-        for event in Self::input_events(window) {
-            self.update_event(event, dt);
+        for &event in events {
+            self.handle_event(platform, event, dt);
         }
         self.advance_world(dt);
     }
 
-    /// a script can send the same semantic events as the minifb adapter below.
-    pub fn update_event(&mut self, event: InputEvent, dt: f32) {
+    pub fn handle_event<P: Platform>(&mut self, platform: &mut P, event: InputEvent, dt: f32) {
         if matches!(event, InputEvent::Quit) {
             self.quit_requested = true;
             return;
@@ -211,12 +244,32 @@ impl Game {
                 ) && self.player.ammo > 0
                     && self.player.shoot_cooldown <= 0.0 =>
             {
-                self.fire();
+                self.fire(25);
+                platform.play_sound(SoundKind::Shoot);
+                self.player.ammo -= 1;
+                self.player.shoot_cooldown = 0.25;
+                self.arsenal.handle_input(event);
+            }
+            InputEvent::Fire
+                if matches!(
+                    self.arsenal.state,
+                    WeaponState::Idle {
+                        weapon: WeaponKind::ShortGun
+                    }
+                ) && self.player.ammo > 0
+                    && self.player.shoot_cooldown <= 0.0 =>
+            {
+                self.fire(35);
+                platform.play_sound(SoundKind::PistolShoot);
                 self.player.ammo -= 1;
                 self.player.shoot_cooldown = 0.35;
                 self.arsenal.handle_input(event);
             }
-            other => self.arsenal.handle_input(other),
+            other => {
+                if self.arsenal.handle_input(other) {
+                    platform.play_sound(SoundKind::SwitchWeapon);
+                }
+            }
         }
     }
 
@@ -240,42 +293,50 @@ impl Game {
         }
         self.player.shoot_cooldown = self.player.shoot_cooldown.max(0.0);
 
-        for grenade in &mut self.grenades {
-            grenade.x += grenade.dx * 5.0 * dt;
-            grenade.y += grenade.dy * 5.0 * dt;
-            grenade.fuse -= dt;
-        }
-        let mut bursts = Vec::new();
-        self.grenades.retain(|g| {
-            if g.fuse <= 0.0 {
-                bursts.push((g.x, g.y));
-                false
+        let mut i = 0;
+        while i < self.grenades.len() {
+            self.grenades[i].x += self.grenades[i].dx * 5.0 * dt;
+            self.grenades[i].y += self.grenades[i].dy * 5.0 * dt;
+            self.grenades[i].fuse -= dt;
+            if self.grenades[i].fuse <= 0.0 {
+                let gx = self.grenades[i].x;
+                let gy = self.grenades[i].y;
+                self.grenades.swap_remove(i);
+                self.explosions.push(Explosion::new(gx, gy));
             } else {
-                true
+                i += 1;
             }
-        });
-        self.explosions
-            .extend(bursts.into_iter().map(|(x, y)| Explosion::new(x, y)));
-        for explosion in &mut self.explosions {
-            explosion.update(dt);
         }
-        self.explosions.retain(|e| !e.remove);
 
+        let mut i = 0;
+        while i < self.explosions.len() {
+            self.explosions[i].update(dt);
+            if self.explosions[i].remove {
+                self.explosions.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        let player_pos = (self.player.x, self.player.y);
         for enemy in &mut self.enemies {
-            enemy.update(dt, &mut self.player);
+            if let Some(damage) = enemy.update(dt, player_pos) {
+                self.player.damage(damage);
+            }
         }
 
         for pickup in &mut self.pickups {
             if pickup.taken {
                 continue;
             }
-            let d =
-                ((pickup.x - self.player.x).powi(2) + (pickup.y - self.player.y).powi(2)).sqrt();
+            let d = (pickup.x - self.player.x).hypot(pickup.y - self.player.y);
             if d < 0.5 {
                 pickup.taken = true;
                 match pickup.kind {
                     PickupKind::Health => self.player.health = (self.player.health + 25).min(100),
-                    PickupKind::Ammo => self.player.ammo += 20,
+                    PickupKind::Ammo => {
+                        self.player.ammo += 20;
+                    }
                 }
             }
         }
@@ -288,55 +349,7 @@ impl Game {
         }
     }
 
-    fn input_events(window: &Window) -> Vec<InputEvent> {
-        let mut events = Vec::new();
-        let held = [
-            (Key::W, InputEvent::MoveForward),
-            (Key::S, InputEvent::MoveBackward),
-            (Key::A, InputEvent::StrafeLeft),
-            (Key::D, InputEvent::StrafeRight),
-            (Key::Left, InputEvent::TurnLeft),
-            (Key::Right, InputEvent::TurnRight),
-        ];
-        for (key, event) in held {
-            if window.is_key_down(key) {
-                events.push(event);
-            }
-        }
-        if window.is_key_down(Key::Space) || window.get_mouse_down(MouseButton::Left) {
-            events.push(InputEvent::Fire);
-        }
-        for (key, slot) in [(Key::Key1, 1), (Key::Key2, 2), (Key::Key3, 3)] {
-            if window.is_key_pressed(key, KeyRepeat::No) {
-                events.push(InputEvent::EquipSlot(slot));
-            }
-        }
-        for (key, event) in [
-            (Key::V, InputEvent::QuickMelee),
-            (Key::F, InputEvent::QuickMelee),
-            (Key::G, InputEvent::QuickThrowGrenade),
-        ] {
-            if window.is_key_pressed(key, KeyRepeat::No) {
-                events.push(event);
-            }
-        }
-        // minifb 0.28 exposes only three mouse buttons; Mouse4/5 should be
-        // mapped by a richer platform adapter and emitted as QuickMelee here.
-        if window.get_mouse_down(MouseButton::Right) {
-            events.push(InputEvent::QuickMelee);
-        }
-        if let Some((_, scroll_y)) = window.get_scroll_wheel() {
-            if scroll_y > 0.0 {
-                events.push(InputEvent::ScrollUp);
-            }
-            if scroll_y < 0.0 {
-                events.push(InputEvent::ScrollDown);
-            }
-        }
-        events
-    }
-
-    fn fire(&mut self) {
+    fn fire(&mut self, damage: i32) {
         let px = self.player.x;
         let py = self.player.y;
         let angle = self.player.dir_angle;
@@ -357,39 +370,33 @@ impl Game {
             }
         }
         if let Some((i, _)) = best {
-            self.enemies[i].take_damage(25);
+            self.enemies[i].take_damage(damage);
         }
     }
 
-    pub fn render(&self, buf: &mut [u32], w: usize, h: usize) {
-        let mut depth = vec![f32::MAX; w];
-        raycaster::render_walls(buf, &mut depth, w, h, &self.player, &self.textures);
-        self.render_sprites(buf, &depth, w, h);
+    pub fn render(&mut self, buf: &mut [u32], w: usize, h: usize) {
+        if self.depth_buffer.len() != w {
+            self.depth_buffer.resize(w, f32::MAX);
+        }
+        self.depth_buffer.fill(f32::MAX);
+
+        raycaster::render_walls(buf, &mut self.depth_buffer, w, h, &self.player, &self.textures);
+        self.render_sprites(buf, w, h);
         self.render_hud(buf, w, h);
     }
 
-    fn render_sprites(&self, buf: &mut [u32], depth: &[f32], w: usize, h: usize) {
-        struct Sprite {
-            dist: f32,
-            x: f32,
-            y: f32,
-            color: u32,
-            size: f32,
-        }
+    fn render_sprites(&mut self, buf: &mut [u32], w: usize, h: usize) {
+        self.drawables_buffer.clear();
 
-        let mut drawables: Vec<Sprite> = Vec::new();
         for e in &self.enemies {
             if e.is_alive() {
-                drawables.push(Sprite {
+                self.drawables_buffer.push(Sprite {
                     dist: 0.0,
                     x: e.x,
                     y: e.y,
                     color: e.color(),
                     size: e.sprite_size(),
                 });
-                // The software renderer currently uses color silhouettes. This
-                // is the asset binding point for loading the matching PNG atlas.
-                let _asset_path = e.kind.asset_path();
             }
         }
         for p in &self.pickups {
@@ -398,7 +405,7 @@ impl Game {
                     PickupKind::Health => pack(60, 220, 90),
                     PickupKind::Ammo => pack(220, 200, 60),
                 };
-                drawables.push(Sprite {
+                self.drawables_buffer.push(Sprite {
                     dist: 0.0,
                     x: p.x,
                     y: p.y,
@@ -409,7 +416,7 @@ impl Game {
         }
         for explosion in &self.explosions {
             let intensity = 255u8.saturating_sub(explosion.frame.saturating_mul(28));
-            drawables.push(Sprite {
+            self.drawables_buffer.push(Sprite {
                 dist: 0.0,
                 x: explosion.x,
                 y: explosion.y,
@@ -418,13 +425,13 @@ impl Game {
             });
         }
 
-        for sprite in &mut drawables {
+        for sprite in &mut self.drawables_buffer {
             sprite.dist = (sprite.x - self.player.x).hypot(sprite.y - self.player.y);
         }
-        drawables.sort_by(|a, b| b.dist.partial_cmp(&a.dist).unwrap());
+        self.drawables_buffer.sort_by(|a, b| b.dist.partial_cmp(&a.dist).unwrap());
 
         let half_h = h as f32 / 2.0;
-        for sprite in drawables {
+        for sprite in &self.drawables_buffer {
             let dx = sprite.x - self.player.x;
             let dy = sprite.y - self.player.y;
             let angle_to = dy.atan2(dx);
@@ -446,7 +453,7 @@ impl Game {
             let shaded = crate::rendering::textures::shade(sprite.color, fog);
 
             for x in x0.max(0)..x1.min(w as i32) {
-                if corrected >= depth[x as usize] {
+                if corrected >= self.depth_buffer[x as usize] {
                     continue;
                 }
                 for y in y0.max(0)..y1.min(h as i32) {
@@ -457,7 +464,6 @@ impl Game {
     }
 
     fn render_hud(&self, buf: &mut [u32], w: usize, h: usize) {
-        // Hurt flash overlay.
         if self.player.hurt_flash > 0.0 {
             let alpha = (self.player.hurt_flash / 0.25).clamp(0.0, 1.0);
             for px in buf.iter_mut() {
@@ -473,7 +479,30 @@ impl Game {
             }
         }
 
-        // Bottom HUD bar.
+        if matches!(self.arsenal.equipped, WeaponKind::Gun) {
+            let frame = match self.arsenal.state {
+                WeaponState::Shooting { frame } => frame,
+                WeaponState::PullingOut { frame, .. } => frame,
+                _ => 0,
+            };
+            self.hud_gun
+                .draw_frame(buf, w, frame, self.arsenal.y_offset());
+        } else if matches!(self.arsenal.equipped, WeaponKind::ShortGun) {
+            let frame = match self.arsenal.state {
+                WeaponState::Shooting { frame } => {
+                    if frame == 0 {
+                        3
+                    } else {
+                        4
+                    }
+                }
+                WeaponState::PullingOut { frame, .. } => frame.min(2),
+                _ => 2,
+            };
+            self.hud_short_gun
+                .draw_frame(buf, w, frame, self.arsenal.y_offset());
+        }
+
         let bar_h = 28;
         for y in (h - bar_h)..h {
             for x in 0..w {
@@ -484,7 +513,7 @@ impl Game {
             buf,
             w,
             h,
-            10,
+            12,
             (h - bar_h + 10) as i32,
             "HP",
             2,
@@ -494,7 +523,7 @@ impl Game {
             buf,
             w,
             h,
-            50,
+            42,
             (h - bar_h + 10) as i32,
             &format!("{:03}", self.player.health.max(0)),
             2,
@@ -504,7 +533,7 @@ impl Game {
             buf,
             w,
             h,
-            150,
+            86,
             (h - bar_h + 10) as i32,
             "AM",
             2,
@@ -514,7 +543,7 @@ impl Game {
             buf,
             w,
             h,
-            190,
+            116,
             (h - bar_h + 10) as i32,
             &format!("{:03}", self.player.ammo.max(0)),
             2,
@@ -526,9 +555,9 @@ impl Game {
             buf,
             w,
             h,
-            290,
+            160,
             (h - bar_h + 10) as i32,
-            &format!("{:02}", alive),
+            "EN",
             2,
             pack(200, 80, 80),
         );
@@ -536,7 +565,17 @@ impl Game {
             buf,
             w,
             h,
-            370,
+            186,
+            (h - bar_h + 10) as i32,
+            &format!("{:02}", alive),
+            2,
+            pack(230, 230, 230),
+        );
+        font::draw_text(
+            buf,
+            w,
+            h,
+            224,
             (h - bar_h + 10) as i32,
             "LV",
             2,
@@ -546,14 +585,13 @@ impl Game {
             buf,
             w,
             h,
-            410,
+            250,
             (h - bar_h + 10) as i32,
             &format!("{:02}", map::zone_tier(self.player.x, self.player.y)),
             2,
             pack(230, 230, 230),
         );
 
-        // Center crosshair.
         let cx = w as i32 / 2;
         let cy = h as i32 / 2;
         for i in -4..=4 {
@@ -563,18 +601,6 @@ impl Game {
             if cy + i >= 0 && (cy + i as i32) < h as i32 {
                 buf[(cy + i) as usize * w + cx as usize] = pack(0, 255, 0);
             }
-        }
-
-        // Draw the actual first-person weapon over the 3D scene. Knife and
-        // grenade atlases can use the same binding point when added.
-        if matches!(self.arsenal.equipped, WeaponKind::Gun) {
-            let frame = match self.arsenal.state {
-                WeaponState::Shooting { frame } => frame,
-                WeaponState::PullingOut { frame, .. } => frame,
-                _ => 0,
-            };
-            self.hud_gun
-                .draw_frame(buf, w, frame, self.arsenal.y_offset());
         }
 
         if self.won {

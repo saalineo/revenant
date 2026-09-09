@@ -9,6 +9,7 @@ pub enum InputEvent {
     Fire,
     Quit,
     EquipSlot(u8),
+    SwitchWeapon,
     ScrollUp,
     ScrollDown,
     QuickMelee,

@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
 minifb = "0.28"
+rodio = "0.19"
 
 [profile.release]
 opt-level = 3
